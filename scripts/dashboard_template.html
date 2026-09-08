@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ko" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>안경원 순이익</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0b0b0d; color:#eeeef0; margin:0;
+         font-family: system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  ::-webkit-scrollbar { width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb { background:#33333a; border-radius:4px; }
+  summary::-webkit-details-marker { display:none; }
+  summary { list-style:none; }
+  #boot { padding:40px; max-width:800px; margin:0 auto; font-size:15px; line-height:1.8; }
+  #boot h2 { font-size:18px; font-weight:700; margin-bottom:10px; }
+  #boot .muted { color:#8a8a92; font-size:13px; }
+  #boot pre { margin-top:14px; padding:12px; background:#17171a; border:1px solid #2a2a30;
+              border-radius:8px; white-space:pre-wrap; word-break:break-all;
+              font-size:12px; color:#ff9d9d; }
+</style>
+</head>
+<body>
+<div id="root"><div id="boot"><h2>불러오는 중입니다…</h2>
+  <div class="muted">이 화면이 계속 보이면 인터넷 연결을 확인해주세요.</div></div></div>
+
+<script>
+const PAYLOAD = /*__DATA__*/null;
+
+function fail(t, d) {
+  document.getElementById("root").innerHTML =
+    '<div id="boot"><h2>' + t + '</h2><div class="muted">이 내용을 알려주시면 고쳐드리겠습니다.</div>' +
+    (d ? '<pre>' + String(d).replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])) + '</pre>' : '') + '</div>';
+}
+window.addEventListener("error", e =>
+  fail("화면을 그리는 중 문제가 생겼습니다", (e.message||"") + "\n" + (e.filename||"") + " : " + (e.lineno||"") + "행"));
+
+function boot() {
+  const miss = ["React","ReactDOM","htm"].filter(k => !window[k]);
+  if (miss.length) return fail("화면 만드는 도구를 못 받았습니다",
+    "못 받은 것: " + miss.join(", ") + "\n\n인터넷 연결을 확인하고 새로고침(F5) 해주세요.");
+  try { start(); } catch (e) { fail("화면을 그리는 중 문제가 생겼습니다", (e && e.stack) || e); }
+}
+
+function start() {
+  const html = htm.bind(React.createElement);
+  const { useState, useMemo } = React;
+
+  const D = PAYLOAD.data || PAYLOAD;
+  const B = D.basis["귀속"];
+  const MONTHS = Object.keys(B).filter(m => B[m].revenue > 0).sort();
+  if (!MONTHS.length) return fail("아직 볼 수 있는 자료가 없습니다", "06_매출 폴더를 확인해주세요.");
+
+  const KR = n => {
+    n = Math.round(n || 0);
+    const neg = n < 0; n = Math.abs(n);
+    if (n < 10000) return (neg?"-":"") + n.toLocaleString("ko-KR") + "원";
+    const e = Math.floor(n/100000000), man = Math.floor((n%100000000)/10000);
+    return (neg?"-":"") + (e ? e + "억 " : "") + (man || !e ? man.toLocaleString("ko-KR") + "만" : "") + "원";
+  };
+  const RECUR = 5;   // 이 개월 수 이상 나오면 '매달 나가는 돈' 으로 본다
+
+  const CAT = {
+    "인건비":     ["👥", "월급", "직원 급여·알바비·퇴직금"],
+    "임대료":     ["🏠", "월세", "이마트 임대료 (관리비 포함)"],
+    "거래처매입": ["📦", "재료값", "렌즈·테 사온 돈"],
+    "사업경비":   ["🧾", "가게 비용", "세금·보험·카드값·수수료"],
+    "식대":       ["🍚", "밥값", "직원 식대"],
+    "금융비용":   ["🏦", "대출이자", ""],
+  };
+  const ORDER = ["인건비", "임대료", "거래처매입", "사업경비", "식대", "금융비용"];
+  // 매달 거의 같게 나가는 성격의 분류 (재료값·밥값은 매출 따라 변한다)
+  const FIXED_CAT = ["임대료", "인건비", "금융비용"];
+
+  const pack = m => {
+    const b = B[m] || {}; const c = b.byCategory || {};
+    const income = b.revenue || 0;
+    const material = (c["거래처매입"] || 0) - (c["매입환불"] || 0);
+    const upkeep = ["인건비","임대료","식대","사업경비","금융비용"]
+                   .reduce((s,k) => s + (c[k]||0), 0);
+    const parties = b.parties || [];
+    const groups = ORDER.map(k => ({
+      key: k,
+      amount: k === "거래처매입" ? material : (c[k] || 0),
+      rows: parties.filter(p => p.category === k).sort((a,z) => z.amount - a.amount),
+    })).filter(g => g.amount > 0);
+    // 매달 꼭 나가는 돈
+    let fixed = 0; const fixedRows = [];
+    parties.forEach(p => {
+      if (FIXED_CAT.includes(p.category) || (p.category === "사업경비" && p.months >= RECUR)) {
+        fixed += p.amount; fixedRows.push(p);
+      }
+    });
+    fixedRows.sort((a,z) => z.amount - a.amount);
+    const profit = income - material - upkeep;
+    // 아직 자료가 안 들어온 고정비 (8월 급여는 9월에 나간다)
+    const est = b.estimate || [];
+    const estTotal = b.estTotal || 0;
+    // 예상치를 넣은 고정비 — 안 그러면 월급이 통째로 빠져 보인다
+    const fixedEst = fixed + est.filter(e => FIXED_CAT.includes(e.category))
+                                .reduce((s,e) => s + e.shortfall, 0);
+    return { income, material, upkeep, profit, groups, fixed, fixedRows,
+             est, estTotal, fixedEst, profitEst: profit - estTotal,
+             cost: material + upkeep, rate: income ? profit/income*100 : 0,
+             missing: b.missing || [], inProgress: !!b.inProgress,
+             incomplete: !!(b.missing && b.missing.length) };
+  };
+
+  const Bar = ({ pct, color }) => html`
+    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-white/5">
+      <div className="h-full rounded-full"
+           style=${{ width: Math.max(0, Math.min(100, pct||0)) + "%", background: color }}></div>
+    </div>`;
+
+  const Box = ({ children, cls="" }) => html`
+    <div className=${"mb-5 rounded-2xl border border-white/10 bg-[#17171a] px-6 py-5 " + cls}>${children}</div>`;
+
+  function App() {
+    // 진행 중인 달은 며칠치만 있어 오해를 부른다. 끝난 마지막 달로 연다.
+    const ended = MONTHS.map((x,n) => B[x].inProgress ? -1 : n).filter(n => n >= 0);
+    const [i, setI] = useState(ended.length ? ended[ended.length-1] : MONTHS.length-1);
+    const m = MONTHS[i];
+    const s = useMemo(() => pack(m), [i]);
+    const trend = useMemo(() => MONTHS.slice(-6).map(x => ({ m:x, ...pack(x) })), []);
+    const maxT = Math.max(1, ...trend.map(t => t.income));
+
+    return html`
+    <div className="mx-auto max-w-[780px] px-5 py-8">
+
+      <div className="mb-6 flex items-center justify-between">
+        <button onClick=${() => setI(Math.max(0,i-1))} disabled=${i===0}
+          className="rounded-lg px-3 py-2 text-[18px] text-neutral-500 hover:text-white disabled:opacity-20">‹</button>
+        <div className="text-[15px] font-semibold text-neutral-300">${m.slice(0,4)}년 ${+m.slice(5)}월</div>
+        <button onClick=${() => setI(Math.min(MONTHS.length-1,i+1))} disabled=${i===MONTHS.length-1}
+          className="rounded-lg px-3 py-2 text-[18px] text-neutral-500 hover:text-white disabled:opacity-20">›</button>
+      </div>
+
+      <div className="mb-5 rounded-2xl border border-white/10 bg-[#17171a] px-6 py-8 text-center">
+        <div className="text-[13.5px] text-neutral-400">이번 달 남은 돈</div>
+        <div className=${"mt-1.5 text-[42px] font-bold leading-tight tracking-tight " +
+          (s.profit >= 0 ? "text-emerald-400" : "text-rose-400")}>${KR(s.profit)}</div>
+        <div className="mt-2 text-[12.5px] text-neutral-500">
+          들어온 돈 ${KR(s.income)} − 나간 돈 ${KR(s.cost)}
+          ${s.income ? html`<span className="mx-2 text-neutral-700">|</span>100원 팔면 ${Math.round(s.rate)}원` : null}
+        </div>
+      </div>
+
+      ${s.incomplete ? html`
+        <div className="mb-5 rounded-2xl border border-amber-500/25 bg-amber-500/5 px-5 py-4">
+          <div className="flex gap-3">
+            <span className="text-[17px]">⚠️</span>
+            <div className="text-[13px] leading-relaxed text-amber-100/80">
+              <b className="text-amber-100">
+                ${s.inProgress ? "아직 진행 중인 달입니다." : "아직 계산이 안 끝난 달입니다."}</b><br/>
+              ${s.inProgress
+                ? html`지금까지 판 것만 나와 있습니다. 렌즈값·월급·월세는 한 달치가
+                       통째로 나가니, <b>달이 끝나야</b> 남는 돈을 알 수 있습니다.`
+                : html`렌즈값·월급·월세는 <b>다음 달</b>에 빠져나갑니다.
+                       ${s.est.length ? null : html` 지금은 <b>남은 돈이 실제보다 많게</b> 보입니다.`}`}
+            </div>
+          </div>
+          ${s.est.length ? html`
+            <div className="mt-3 border-t border-amber-500/20 pt-3">
+              <div className="text-[12.5px] text-amber-100/70">
+                아래 돈이 <b className="text-amber-100">아직 안 들어왔습니다.</b>
+                지난 달들을 보면 이만큼 나갑니다.
+              </div>
+              <div className="mt-2.5 space-y-1.5">
+                ${s.est.map(e => html`
+                  <div key=${e.category} className="flex items-baseline gap-3 text-[13px]">
+                    <span className="w-5">${(CAT[e.category]||["·"])[0]}</span>
+                    <span className="flex-1 text-neutral-300">
+                      ${(CAT[e.category]||["","",""])[1] || e.category}
+                      ${e.actual > 0 ? html`<span className="ml-1.5 text-[11.5px] text-neutral-500">
+                        ${KR(e.actual)} 만 들어옴</span>` : null}
+                    </span>
+                    <span className="tnum font-semibold text-amber-200">약 ${KR(e.shortfall)}</span>
+                  </div>`)}
+              </div>
+              <div className="mt-3 flex items-baseline justify-between border-t border-amber-500/20 pt-2.5">
+                <span className="text-[13px] text-amber-100/80">이걸 빼면 남는 돈은</span>
+                <span className=${"tnum text-[19px] font-bold " +
+                  (s.profitEst >= 0 ? "text-emerald-300" : "text-rose-300")}>
+                  ${KR(s.profitEst)}</span>
+              </div>
+              <div className="mt-1 text-[11.5px] text-neutral-500">
+                정확히 알려면 ${s.missing.join(" · ")} 이 필요합니다.
+              </div>
+            </div>` : null}
+        </div>` : null}
+
+      ${(D.warn || []).length ? html`
+        <${Box}>
+          <div className="mb-3 text-[15px] font-semibold">지금 살펴볼 것</div>
+          <div className="space-y-3">
+            ${D.warn.map((w, n) => {
+              const tone = w.level === "high" ? ["🔴", "border-rose-500/30 bg-rose-500/[0.05]"]
+                        : w.level === "mid"  ? ["🟡", "border-amber-500/30 bg-amber-500/[0.05]"]
+                        : ["🟢", "border-emerald-500/30 bg-emerald-500/[0.05]"];
+              return html`
+                <div key=${n} className=${"flex gap-3 rounded-xl border px-4 py-3 " + tone[1]}>
+                  <span className="text-[15px]">${tone[0]}</span>
+                  <div>
+                    <div className="text-[13.5px] font-semibold">${w.title}</div>
+                    <div className="mt-1 text-[12.5px] leading-relaxed text-neutral-400">${w.detail}</div>
+                  </div>
+                </div>`;
+            })}
+          </div>
+        <//>` : null}
+
+      <${Box} cls="border-sky-500/25 bg-sky-500/[0.04]">
+        <div className="flex items-baseline justify-between">
+          <div>
+            <div className="text-[15px] font-semibold">매달 꼭 나가는 돈</div>
+            <div className="mt-0.5 text-[12.5px] text-neutral-500">
+              장사가 안 돼도 나가는 고정비입니다.</div>
+          </div>
+          <div className="tnum text-[22px] font-bold text-sky-300">${KR(s.fixedEst)}</div>
+        </div>
+        <div className="mt-3 text-[12.5px] text-neutral-400">
+          이 돈을 벌려면 <b className="text-neutral-200">
+          최소 ${KR(s.fixedEst + s.material)}</b> 은 팔아야 본전입니다.
+          ${s.income ? html` 이번 달은 ${KR(s.income)} 팔았습니다.` : null}
+        </div>
+        <div className="mt-4 space-y-2">
+          ${s.fixedRows.map(p => html`
+            <div key=${p.name} className="flex items-baseline gap-3 text-[13px]">
+              <span className="w-5">${(CAT[p.category]||["·"])[0]}</span>
+              <span className="flex-1 text-neutral-300">${p.name}</span>
+              <span className="tnum text-neutral-200">${KR(p.amount)}</span>
+              <span className="tnum w-10 text-right text-[11.5px] text-neutral-600">
+                ${s.fixedEst ? Math.round(p.amount/s.fixedEst*100) : 0}%</span>
+            </div>`)}
+          ${s.est.filter(e => FIXED_CAT.includes(e.category)).map(e => html`
+            <div key=${"e"+e.category}
+                 className="flex items-baseline gap-3 rounded-lg bg-amber-500/[0.07] px-2 py-1 text-[13px]">
+              <span className="w-5">${(CAT[e.category]||["·"])[0]}</span>
+              <span className="flex-1 text-amber-100/80">
+                ${(CAT[e.category]||["","",""])[1] || e.category}
+                <span className="ml-1.5 text-[11.5px] text-amber-200/60">아직 안 들어옴 · 예상</span>
+              </span>
+              <span className="tnum text-amber-200">약 ${KR(e.shortfall)}</span>
+              <span className="tnum w-10 text-right text-[11.5px] text-neutral-600">
+                ${s.fixedEst ? Math.round(e.shortfall/s.fixedEst*100) : 0}%</span>
+            </div>`)}
+        </div>
+      <//>
+
+      <${Box}>
+        <div className="mb-1 text-[15px] font-semibold">나간 돈, 어디에 썼나</div>
+        <div className="mb-4 text-[12.5px] text-neutral-500">
+          모두 ${KR(s.cost)} · 항목을 누르면 자세히 보입니다.</div>
+        ${s.groups.map(g => {
+          const [emoji, label, sub] = CAT[g.key];
+          const pct = s.cost ? Math.round(g.amount/s.cost*100) : 0;
+          return html`
+            <details key=${g.key} className="border-b border-white/5 py-2 last:border-0">
+              <summary className="cursor-pointer">
+                <div className="flex items-baseline gap-3">
+                  <span className="w-6 text-[15px]">${emoji}</span>
+                  <span className="flex-1 text-[14px] font-medium">${label}
+                    <span className="ml-2 text-[11.5px] font-normal text-neutral-600">${sub}</span></span>
+                  <span className="tnum text-[15px] font-semibold">${KR(g.amount)}</span>
+                  <span className="tnum w-11 text-right text-[12px] text-neutral-500">${pct}%</span>
+                </div>
+                <${Bar} pct=${pct} color="#64748b" />
+              </summary>
+              <div className="mb-1 ml-9 mt-3 space-y-1.5">
+                ${g.rows.map(p => html`
+                  <div key=${p.name} className="flex items-baseline gap-3 text-[12.5px]">
+                    <span className="flex-1 text-neutral-400">${p.name}
+                      ${p.months >= RECUR ? html`<span className="ml-1.5 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10.5px] text-sky-300">매달</span>` : null}
+                    </span>
+                    <span className="tnum text-neutral-300">${KR(p.amount)}</span>
+                  </div>`)}
+              </div>
+            </details>`;
+        })}
+      <//>
+
+      ${(D.save || []).length ? html`
+        <${Box} cls="border-emerald-500/20 bg-emerald-500/[0.03]">
+          <div className="text-[15px] font-semibold">💡 돈을 더 남기려면</div>
+          <div className="mt-0.5 mb-4 text-[12.5px] text-neutral-500">
+            지금 숫자를 보고 뽑은 것입니다. 위에서부터 효과가 큽니다.</div>
+          <div className="space-y-3">
+            ${D.save.map((s2, n) => html`
+              <div key=${n} className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
+                <div className="flex items-baseline gap-2">
+                  <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-300">${n + 1}</span>
+                  <span className="text-[13.5px] font-semibold">${s2.title}</span>
+                </div>
+                <div className="mt-1.5 text-[12.5px] leading-relaxed text-neutral-400">${s2.detail}</div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
+                  <span className="text-neutral-300">👉 ${s2.action}</span>
+                  <span className="font-medium text-emerald-400">${s2.impact}</span>
+                </div>
+              </div>`)}
+          </div>
+        <//>` : null}
+
+      <${Box}>
+        <div className="mb-1 text-[15px] font-semibold">달마다 얼마 남았나</div>
+        <div className="mb-4 text-[12.5px] text-neutral-500">회색이 들어온 돈, 색깔이 남은 돈입니다.</div>
+        ${trend.map(t => html`
+          <div key=${t.m} className="py-2">
+            <div className="flex items-baseline gap-3">
+              <button onClick=${() => setI(MONTHS.indexOf(t.m))}
+                className=${"w-11 text-left text-[13px] " +
+                  (t.m === m ? "font-bold text-white" : "text-neutral-400 hover:text-white")}>
+                ${+t.m.slice(5)}월</button>
+              <span className="tnum flex-1 text-[12.5px] text-neutral-500">${KR(t.income)}</span>
+              <span className=${"tnum text-[14px] font-semibold " +
+                (t.profit >= 0 ? "text-emerald-400" : "text-rose-400")}>${KR(t.profit)}</span>
+              ${t.incomplete ? html`<span className="text-[11px] text-amber-500/70">계산중</span>` : null}
+            </div>
+            <div className="relative mt-1.5 h-2.5 overflow-hidden rounded-full bg-white/5">
+              <div className="absolute inset-y-0 left-0 rounded-full bg-white/15"
+                   style=${{ width: (t.income/maxT*100) + "%" }}></div>
+              <div className="absolute inset-y-0 left-0 rounded-full"
+                   style=${{ width: (Math.max(t.profit,0)/maxT*100) + "%",
+                             background: t.profit >= 0 ? "#22c55e" : "#f43f5e" }}></div>
+            </div>
+          </div>`)}
+      <//>
+
+      <details className="mb-5 rounded-2xl border border-white/10 bg-[#17171a] px-6 py-4">
+        <summary className="cursor-pointer text-[14px] font-medium text-neutral-300">
+          최근 들어오고 나간 돈 보기 ▾</summary>
+        <div className="mt-4 max-h-[380px] overflow-y-auto">
+          <table className="w-full text-[12.5px]">
+            <tbody>
+              ${(D.recent || []).map((r, n) => html`
+                <tr key=${n} className="border-b border-white/5">
+                  <td className="tnum py-2 pr-3 whitespace-nowrap text-neutral-500">${r.date.slice(5)}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap text-neutral-400">
+                    ${(CAT[r.kind] || ["", r.kind])[1]}</td>
+                  <td className="py-2 pr-3 text-neutral-300">${r.who}</td>
+                  <td className=${"tnum py-2 text-right whitespace-nowrap " +
+                    (r.dir === "수입" ? "text-emerald-400" : "text-neutral-300")}>
+                    ${r.dir === "수입" ? "+" : "−"}${KR(r.amount)}</td>
+                </tr>`)}
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <p className="text-center text-[11.5px] text-neutral-600">${D.generated} 기준</p>
+    </div>`;
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(html`<${App} />`);
+}
+if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", boot);
+else boot();
+</script>
+</body>
+</html>
