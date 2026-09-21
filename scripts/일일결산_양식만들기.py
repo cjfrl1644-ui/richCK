@@ -104,11 +104,13 @@ def load_products():
     return out, True
 
 
-def build_day(wb, y, m, day):
+def build_day(wb, y, m, day, blank=False):
     ws = wb.create_sheet(f"{day}일")
     last, t = FIRST + ROWS_PER_DAY - 1, FIRST + ROWS_PER_DAY
 
-    ws["A1"] = f"{m}월 {day}일 ({WEEK[calendar.weekday(y, m, day)]})"
+    # 빈 원본은 어느 달인지 모른다. 월합계 A1 에 적은 달을 그대로 따라온다.
+    ws["A1"] = (f'=월합계!$A$1&" {day}일"' if blank else
+                f"{m}월 {day}일 ({WEEK[calendar.weekday(y, m, day)]})")
     ws["A1"].font = Font(bold=True, size=16)
     ws[f'{A["안경테"]}1'] = ("한 줄에 손님 한 분.  산 것만 골라주세요 "
                              "(테+누진이면 두 칸).  돈은 받은 방법에 한 번만.")
@@ -249,11 +251,15 @@ def build_setup(wb, products, found):
             DefinedName(f"{name}목록", attr_text=dyn(get_column_letter(ci))))
 
 
-def build_summary(wb, y, m, days):
+def build_summary(wb, y, m, days, blank=False):
     t = FIRST + ROWS_PER_DAY
     su = wb.create_sheet("월합계")
-    su["A1"] = f"{y}년 {m}월"
     su["A1"].font = Font(bold=True, size=18)
+    if blank:
+        su["A2"] = "← A1 칸에 '2026년 10월' 처럼 이번 달을 적어주세요. 날짜 시트에 따라 붙습니다."
+        su["A2"].font = Font(bold=True, size=11, color="C00000")
+    else:
+        su["A1"] = f"{y}년 {m}월"
 
     # 맨 위에 누진·콘택트 건수를 크게. 칸을 합쳐 써야 ##### 로 안 잘린다.
     su["D1"] = "이번 달"
@@ -333,10 +339,12 @@ def build_summary(wb, y, m, days):
     su.freeze_panes = "C4"
 
 
-def make_workbook(y, m, extra=None):
+def make_workbook(y, m, extra=None, blank=False):
     """빈 양식 워크북을 만들어 돌려준다. (일지_옮기기.py 도 이걸 쓴다)
 
     extra: {"누진": ["대명누진", ...]} 처럼 목록에 더 넣을 이름.
+    blank: 달을 안 박은 '원본'. 31일까지 만들고 요일은 안 적는다.
+           (달마다 복사해서 쓰려면 9월 요일이 박혀 있으면 안 된다)
     """
     products, found = load_products()
     for k, names in (extra or {}).items():
@@ -344,10 +352,10 @@ def make_workbook(y, m, extra=None):
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    days = calendar.monthrange(y, m)[1]
-    build_summary(wb, y, m, days)
+    days = 31 if blank else calendar.monthrange(y, m)[1]
+    build_summary(wb, y, m, days, blank)
     for d in range(1, days + 1):
-        build_day(wb, y, m, d)
+        build_day(wb, y, m, d, blank)
     build_setup(wb, products, found)
     return wb, products, found
 
@@ -364,22 +372,64 @@ def next_month():
     return (y + 1, 1) if m == 13 else (y, m)
 
 
+def read_setup(path):
+    """이미 쓰고 있는 새 양식 파일의 설정 시트에서 제품 목록을 가져온다."""
+    wb = openpyxl.load_workbook(path, data_only=True)
+    if "설정" not in wb.sheetnames:
+        wb.close()
+        return {}
+    st = wb["설정"]
+    out = {}
+    for c in range(1, 12):
+        head = st.cell(3, c).value
+        if head in ITEMS:
+            out[head] = [str(st.cell(r, c).value).strip()
+                         for r in range(4, 4 + LIST_ROWS)
+                         if st.cell(r, c).value not in (None, "")]
+    wb.close()
+    return out
+
+
 def main():
-    if len(sys.argv) >= 3:
-        y, m = int(sys.argv[1]), int(sys.argv[2])
+    # --out "저장할 파일.xlsx"  저장 위치 지정 (안 주면 06_매출)
+    # --원본                   달을 안 박은 빈 원본. 31일까지.
+    # --목록 "파일.xlsx"        그 파일의 설정 시트에서 제품 목록을 가져온다
+    argv, out_path, blank, seed = [], None, False, None
+    it = iter(sys.argv[1:])
+    for a in it:
+        if a == "--out":
+            out_path = Path(next(it, ""))
+        elif a in ("--원본", "--blank"):
+            blank = True
+        elif a in ("--목록", "--seed"):
+            seed = Path(next(it, ""))
+        else:
+            argv.append(a)
+
+    if len(argv) >= 2:
+        y, m = int(argv[0]), int(argv[1])
     else:
         y, m = next_month()
 
-    wb, products, found = make_workbook(y, m)
-    days = calendar.monthrange(y, m)[1]
+    extra = read_setup(seed) if seed and seed.exists() else None
+    wb, products, found = make_workbook(y, m, extra, blank)
+    days = 31 if blank else calendar.monthrange(y, m)[1]
 
-    out = SALES_DIR / f"{y}년 {m}월.xlsx"
-    if out.exists():
-        out = SALES_DIR / f"{y}년 {m}월 (새양식).xlsx"
+    if out_path:
+        out = out_path
+    elif blank:
+        out = SALES_DIR / "일일결산 원본양식.xlsx"
+    else:
+        out = SALES_DIR / f"{y}년 {m}월.xlsx"
+        if out.exists():
+            out = SALES_DIR / f"{y}년 {m}월 (새양식).xlsx"
     wb.save(out)
 
     print(f"만들었습니다: {out.name}")
     print(f"   시트 — 월합계 · 1일~{days}일 · 설정")
+    if blank:
+        print(f"   달은 안 박아뒀습니다. 월합계 시트 A1 에 '2026년 10월' 처럼 적으면")
+        print(f"   날짜 시트 제목이 따라 바뀝니다.")
     print(f"   품목 칸 — {' / '.join(ITEMS)}  (드롭다운에서 고르면 그게 곧 1건)")
     if found:
         for it in ITEMS:
